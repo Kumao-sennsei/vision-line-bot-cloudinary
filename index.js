@@ -1,89 +1,85 @@
 require("dotenv").config();
 const express = require("express");
-const { middleware, Client } = require("@line/bot-sdk");
+const line = require("@line/bot-sdk");
 const axios = require("axios");
-const cloudinary = require("cloudinary").v2;
+const { v4: uuidv4 } = require("uuid");
 const fs = require("fs");
-const path = require("path");
-
-cloudinary.config({
-  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
-  api_key: process.env.CLOUDINARY_API_KEY,
-  api_secret: process.env.CLOUDINARY_API_SECRET
-});
+const FormData = require("form-data");
 
 const app = express();
-app.use(express.json());
-app.use(express.urlencoded({ extended: true }));
+const port = process.env.PORT || 3000;
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET
+  channelSecret: process.env.LINE_CHANNEL_SECRET,
 };
-const client = new Client(config);
+const client = new line.Client(config);
+app.use(express.json());
 
-app.post("/webhook", middleware(config), async (req, res) => {
-  const events = req.body.events;
-  for (const event of events) {
-    if (event.type === "message" && event.message.type === "image") {
-      try {
-        const stream = await client.getMessageContent(event.message.id);
-        const tempPath = path.join(__dirname, "temp.jpg");
-        const writeStream = fs.createWriteStream(tempPath);
-        stream.pipe(writeStream).on("close", async () => {
-          try {
-            const uploadRes = await cloudinary.uploader.upload(tempPath, {
-              folder: "vision-bot"
-            });
-            fs.unlinkSync(tempPath);
+// LINE Webhook
+app.post("/webhook", line.middleware(config), async (req, res) => {
+  try {
+    const events = req.body.events;
+    for (const event of events) {
+      if (event.message && event.message.type === "image") {
+        const messageId = event.message.id;
+        const stream = await client.getMessageContent(messageId);
 
-            const imageUrl = uploadRes.secure_url;
+        // Save image to temp file
+        const tempPath = `/tmp/${uuidv4()}.jpg`;
+        const writable = fs.createWriteStream(tempPath);
+        stream.pipe(writable);
+        await new Promise((resolve) => writable.on("finish", resolve));
 
-            const gptRes = await axios.post("https://api.openai.com/v1/chat/completions", {
-              model: "gpt-4o",
-              messages: [
-                {
-                  role: "system",
-                  content: "あなたは優しくて丁寧な数学の先生です。生徒に対して、読みやすく整った数式と、親しみやすく丁寧な解説をしてください。"
-                },
-                {
-                  role: "user",
-                  content: [
-                    {
-                      type: "image_url",
-                      image_url: { url: imageUrl }
-                    }
-                  ]
-                }
-              ]
-            }, {
-              headers: {
-                Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-                "Content-Type": "application/json"
-              }
-            });
+        // Upload to Cloudinary
+        const cloudinaryUrl = "https://api.cloudinary.com/v1_1/" + process.env.CLOUDINARY_CLOUD_NAME + "/image/upload";
+        const form = new FormData();
+        form.append("file", fs.createReadStream(tempPath));
+        form.append("upload_preset", process.env.CLOUDINARY_UPLOAD_PRESET);
 
-            await client.replyMessage(event.replyToken, {
-              type: "text",
-              text: gptRes.data.choices[0].message.content
-            });
-          } catch (err) {
-            await client.replyMessage(event.replyToken, {
-              type: "text",
-              text: "画像の処理中にエラーが発生しました。"
-            });
+        const uploadRes = await axios.post(cloudinaryUrl, form, {
+          headers: form.getHeaders(),
+        });
+        const imageUrl = uploadRes.data.secure_url;
+
+        // Send to OpenAI Vision
+        const visionRes = await axios.post(
+          "https://api.openai.com/v1/chat/completions",
+          {
+            model: "gpt-4-vision-preview",
+            messages: [
+              {
+                role: "user",
+                content: [
+                  { type: "text", text: "この画像の内容を詳しく説明してください。" },
+                  { type: "image_url", image_url: { url: imageUrl } },
+                ],
+              },
+            ],
+            max_tokens: 1000,
+          },
+          {
+            headers: {
+              Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+              "Content-Type": "application/json",
+            },
           }
-        });
-      } catch (err) {
-        await client.replyMessage(event.replyToken, {
-          type: "text",
-          text: "画像の取得に失敗しました。"
-        });
+        );
+
+        const replyText = visionRes.data.choices[0].message.content;
+
+        await client.replyMessage(event.replyToken, { type: "text", text: replyText });
+        fs.unlinkSync(tempPath); // Cleanup
+      } else if (event.message && event.message.type === "text") {
+        await client.replyMessage(event.replyToken, { type: "text", text: "画像を送ってください📷" });
       }
     }
+    res.status(200).send("OK");
+  } catch (error) {
+    console.error("Webhook error:", error.message);
+    res.status(500).send("Error");
   }
-  res.sendStatus(200);
 });
 
-const port = process.env.PORT || 3000;
-app.listen(port, () => console.log(`Server running on ${port}`));
+app.get("/", (req, res) => res.send("LINE Vision Bot is running"));
+app.listen(port, () => console.log(`Server running on port ${port}`));
