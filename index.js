@@ -1,85 +1,80 @@
-require('dotenv').config();
 const express = require('express');
-const { middleware, Client } = require('@line/bot-sdk');
-const bodyParser = require('body-parser');
+const line = require('@line/bot-sdk');
 const axios = require('axios');
-const uploadImageToCloudinary = require('./uploadImageToCloudinary');
-
+const dotenv = require('dotenv');
 const app = express();
+dotenv.config();
 
-app.use(bodyParser.json({
-  verify: (req, res, buf) => {
-    req.rawBody = buf.toString();
-  }
-}));
-app.use(middleware({
+app.use(express.json({ verify: (req, res, buf) => { req.rawBody = buf } }));
+
+const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET
-}));
+};
 
-const client = new Client({
-  channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN
-});
+const client = new line.Client(config);
 
-app.post('/webhook', async (req, res) => {
-  Promise.all(req.body.events.map(handleEvent)).then(result => res.json(result));
-});
-
-async function handleEvent(event) {
-  if (event.type !== 'message') return;
-
-  if (event.message.type === 'text') {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '画像を送ってくれたら解説するね📷✨'
-    });
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  const events = req.body.events;
+  if (!Array.isArray(events)) {
+    return res.status(500).end();
   }
 
-  if (event.message.type === 'image') {
+  const results = await Promise.all(events.map(async (event) => {
+    if (event.type !== 'message' || event.message.type !== 'image') {
+      return Promise.resolve(null);
+    }
+
     try {
-      const imageBuffer = await client.getMessageContent(event.message.id);
+      const stream = await client.getMessageContent(event.message.id);
       const chunks = [];
-      for await (const chunk of imageBuffer) {
+      for await (const chunk of stream) {
         chunks.push(chunk);
       }
       const buffer = Buffer.concat(chunks);
-      const imageUrl = await uploadImageToCloudinary(buffer);
+      const base64Image = buffer.toString('base64');
+      const contentType = stream.headers['content-type'] || 'image/jpeg';
 
-      const visionRes = await axios.post("https://api.openai.com/v1/chat/completions", {
-        model: "gpt-4-vision-preview",
-        messages: [
-          {
-            role: "user",
-            content: [
-              { type: "text", text: "この画像を説明してください。" },
-              { type: "image_url", image_url: { url: imageUrl } }
-            ]
+      const response = await axios.post(
+        'https://api.openai.com/v1/chat/completions',
+        {
+          model: 'gpt-4o',
+          messages: [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: 'この画像を見て分かることを教えてください。' },
+                {
+                  type: 'image_url',
+                  image_url: {
+                    url: `data:${contentType};base64,${base64Image}`
+                  }
+                }
+              ]
+            }
+          ]
+        },
+        {
+          headers: {
+            'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+            'Content-Type': 'application/json'
           }
-        ],
-        max_tokens: 1000
-      }, {
-        headers: {
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
-          "Content-Type": "application/json"
         }
-      });
+      );
 
-      const aiReply = visionRes.data.choices[0].message.content;
-
+      const replyText = response.data.choices[0].message.content;
+      return client.replyMessage(event.replyToken, { type: 'text', text: replyText });
+    } catch (error) {
+      console.error('Error:', error);
       return client.replyMessage(event.replyToken, {
-        type: "text",
-        text: aiReply
-      });
-    } catch (err) {
-      console.error("画像処理エラー:", err);
-      return client.replyMessage(event.replyToken, {
-        type: "text",
-        text: "画像の処理中にエラーが発生しました💦"
+        type: 'text',
+        text: '画像の処理中にエラーが発生しました…(´・ω・｀)'
       });
     }
-  }
-}
+  }));
 
-app.listen(3000, () => {
-  console.log('LINE bot is running.');
+  res.status(200).end();
 });
+
+const port = process.env.PORT || 3000;
+app.listen(port, () => console.log(`Server running on ${port}`));
