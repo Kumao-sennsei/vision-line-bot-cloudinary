@@ -1,62 +1,46 @@
-const express = require("express");
-const line = require("@line/bot-sdk");
-const uploadImageToCloudinary = require("./uploadImageToCloudinary");
-require("dotenv").config();
+require('dotenv').config();
+const express = require('express');
+const line = require('@line/bot-sdk');
+const bodyParser = require('body-parser');
+const uploadImageToCloudinary = require('./uploadImageToCloudinary');
 
 const app = express();
-app.use(express.json({ limit: "10mb" }));
+app.use(bodyParser.json({ verify: (req, res, buf) => { req.rawBody = buf } }));
+app.use(bodyParser.urlencoded({ extended: true }));
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 
 const client = new line.Client(config);
 
-app.post("/webhook", line.middleware(config), async (req, res) => {
+app.post('/webhook', line.middleware(config), async (req, res) => {
   const events = req.body.events;
-  if (!Array.isArray(events)) {
-    return res.status(500).end();
-  }
-
-  const results = await Promise.all(
-    events.map(async (event) => {
-      if (event.type !== "message" || event.message.type !== "image") {
-        return;
-      }
-
+  for (const event of events) {
+    if (event.type === 'message' && event.message.type === 'image') {
       try {
-        const stream = await client.getMessageContent(event.message.id);
+        const imageBuffer = await client.getMessageContent(event.message.id);
         const chunks = [];
-        for await (const chunk of stream) {
+        for await (const chunk of imageBuffer) {
           chunks.push(chunk);
         }
-        const imageBuffer = Buffer.concat(chunks);
-        const base64Image = imageBuffer.toString("base64");
-        const dataUrl = `data:image/jpeg;base64,${base64Image}`;
+        const imageBase64 = Buffer.concat(chunks).toString('base64');
+        const imageUrl = await uploadImageToCloudinary(imageBase64);
 
-        const imageUrl = await uploadImageToCloudinary(dataUrl);
-        console.log("Uploaded to:", imageUrl);
-
-        await client.replyMessage(event.replyToken, {
-          type: "text",
-          text: `画像を受け取りました！
-Cloudinary URL:
-${imageUrl}`,
-        });
-      } catch (error) {
-        console.error("Error processing image:", error);
-        await client.replyMessage(event.replyToken, {
-          type: "text",
-          text: "画像の処理中にエラーが発生しました💦",
-        });
+        const visionResponse = `画像を受け取りました！URL: ${imageUrl}`;
+        await client.replyMessage(event.replyToken, { type: 'text', text: visionResponse });
+      } catch (err) {
+        await client.replyMessage(event.replyToken, { type: 'text', text: '画像処理中にエラーが発生しました。' });
       }
-    })
-  );
-
-  res.json(results);
+    } else {
+      await client.replyMessage(event.replyToken, { type: 'text', text: '画像を送ってね📷✨' });
+    }
+  }
+  res.status(200).send('OK');
 });
 
-app.listen(8080, () => {
-  console.log("📡 Server running at port 8080");
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server is running on port ${port}`);
 });
