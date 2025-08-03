@@ -1,4 +1,5 @@
 const cloudinary = require('cloudinary').v2;
+require('dotenv').config();
 
 cloudinary.config({
   cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
@@ -6,13 +7,12 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-module.exports = function uploadImage(buffer) {
-  return new Promise((resolve, reject) => {
-    cloudinary.uploader.upload_stream({
-      upload_preset: process.env.CLOUDINARY_UPLOAD_PRESET,
-    }, (error, result) => {
-      if (error) return reject(error);
-      resolve(result.secure_url);
-    }).end(buffer);
-  });
+module.exports = async function(dataUri) {
+  try {
+    const result = await cloudinary.uploader.upload(dataUri, { folder: 'line-bot' });
+    return result.secure_url;
+  } catch (error) {
+    console.error('Cloudinary upload error:', error);
+    throw error;
+  }
 };
