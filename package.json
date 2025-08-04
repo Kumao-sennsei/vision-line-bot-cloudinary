@@ -1,15 +1,16 @@
 {
-  "name": "kumaobot-cloudinary-webhook",
+  "name": "vision-line-bot-cloudinary",
   "version": "1.0.0",
   "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "@line/bot-sdk": "^7.5.0",
-    "axios": "^1.6.8",
-    "cloudinary": "^1.39.2",
-    "dotenv": "^16.4.5",
-    "express": "^4.19.2"
+    "@line/bot-sdk": "7.5.2",
+    "axios": "^1.6.0",
+    "dotenv": "^16.0.3",
+    "express": "^4.18.2",
+    "raw-body": "^2.5.2",
+    "cloudinary": "^1.37.2"
   }
 }

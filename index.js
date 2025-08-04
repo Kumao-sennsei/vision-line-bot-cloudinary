@@ -24,88 +24,89 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
-// Vision API用
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
-
-app.post("/webhook", express.json({ verify: (req, res, buf) => req.rawBody = buf }),
-  line.middleware(config),
-  (req, res) => {
-    Promise.all(req.body.events.map(handleEvent)).then((result) => res.json(result));
+app.post("/webhook", express.raw({ type: "*/*" }), (req, res) => {
+  const signature = req.headers["x-line-signature"];
+  if (!line.validateSignature(req.body, config.channelSecret, signature)) {
+    return res.status(401).send("Invalid signature");
   }
-);
+
+  const events = JSON.parse(req.body).events;
+  Promise.all(events.map(handleEvent))
+    .then(() => res.status(200).end())
+    .catch((err) => {
+      console.error(err);
+      res.status(500).end();
+    });
+});
 
 async function handleEvent(event) {
-  if (event.type !== "message" || (event.message.type !== "image" && event.message.type !== "text")) {
+  if (event.type !== "message" || event.message.type !== "image") {
     return Promise.resolve(null);
-  }
-
-  if (event.message.type === "text") {
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `くまお先生です🐻 ご質問ありがとうございます！
-
-👉「${event.message.text}」ですね？
-
-いま画像がないので、できれば画像を送ってもらえると助かります📷✨`,
-    });
   }
 
   try {
     const stream = await client.getMessageContent(event.message.id);
     const chunks = [];
-    for await (const chunk of stream) chunks.push(chunk);
+    for await (const chunk of stream) {
+      chunks.push(chunk);
+    }
     const buffer = Buffer.concat(chunks);
 
-    const uploaded = await cloudinary.uploader.upload_stream({ resource_type: "image" }, async (error, result) => {
-      if (error) throw error;
+    const base64Image = buffer.toString("base64");
 
-      const imageUrl = result.secure_url;
+    const uploadResponse = await cloudinary.uploader.upload(
+      `data:image/jpeg;base64,${base64Image}`,
+      { folder: "line_bot" }
+    );
 
-      const visionRes = await axios.post("https://api.openai.com/v1/chat/completions", {
+    const imageUrl = uploadResponse.secure_url;
+
+    const visionResponse = await axios.post(
+      "https://api.openai.com/v1/chat/completions",
+      {
         model: "gpt-4o",
         messages: [
           {
             role: "system",
-            content: "あなたは優しい先生です。生徒が送った画像を見て、分かりやすく丁寧に日本語で解説してください。",
+            content: "あなたは優しい先生です。画像に写っている内容を生徒に説明してください。",
           },
           {
             role: "user",
             content: [
-              { type: "image_url", image_url: { url: imageUrl } },
-              { type: "text", text: "この画像を説明してください。" },
+              {
+                type: "image_url",
+                image_url: {
+                  url: imageUrl,
+                },
+              },
             ],
           },
         ],
-        temperature: 0.7,
-      }, {
+        max_tokens: 1000,
+      },
+      {
         headers: {
-          Authorization: `Bearer ${OPENAI_API_KEY}`,
           "Content-Type": "application/json",
+          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
         },
-      });
+      }
+    );
 
-      const answer = visionRes.data.choices[0].message.content;
+    const aiReply = visionResponse.data.choices[0].message.content;
 
-      await client.replyMessage(event.replyToken, {
-        type: "text",
-        text: `📷画像を受け取りました！
-
-${answer}`,
-      });
-    });
-
-    const passthrough = require("stream").PassThrough();
-    passthrough.end(buffer);
-    passthrough.pipe(uploaded);
-  } catch (err) {
-    console.error("Error handling image:", err);
     return client.replyMessage(event.replyToken, {
       type: "text",
-      text: "画像の処理中にエラーが発生しました🙏",
+      text: aiReply,
+    });
+  } catch (error) {
+    console.error("Error:", error);
+    return client.replyMessage(event.replyToken, {
+      type: "text",
+      text: "画像の処理中にエラーが発生しました。",
     });
   }
 }
 
 app.listen(port, () => {
-  console.log(`🟢 サーバー起動中 on port ${port}`);
+  console.log(`サーバー起動中 on port ${port}`);
 });
