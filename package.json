@@ -1,1 +1,15 @@
-// package.json content goes here
+{
+  "name": "vision-line-bot-cloudinary",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "@line/bot-sdk": "7.5.2",
+    "axios": "^1.6.7",
+    "dotenv": "^16.4.5",
+    "express": "^4.19.2",
+    "raw-body": "^2.5.2"
+  }
+}
