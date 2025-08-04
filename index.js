@@ -39,7 +39,6 @@ app.post("/webhook", middleware(config), async (req, res) => {
   res.json(results);
 });
 
-// 仮ハンドラー
 async function handleEvent(event) {
   if (event.type !== "message") return Promise.resolve(null);
 
