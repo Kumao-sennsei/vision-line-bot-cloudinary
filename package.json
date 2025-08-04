@@ -1,16 +1,1 @@
-{
-  "name": "vision-line-bot-cloudinary",
-  "version": "1.0.0",
-  "main": "index.js",
-  "scripts": {
-    "start": "node index.js"
-  },
-  "dependencies": {
-    "@line/bot-sdk": "7.5.2",
-    "axios": "^1.6.0",
-    "dotenv": "^16.0.3",
-    "express": "^4.18.2",
-    "raw-body": "^2.5.2",
-    "cloudinary": "^1.37.2"
-  }
-}
+{ "name": "vision-line-bot", "dependencies": { "@line/bot-sdk": "7.5.2" } }
