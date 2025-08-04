@@ -1,5 +1,0 @@
-{
-  "buildCommand": "npm install",
-  "startCommand": "node index.js",
-  "rootDirectory": "."
-}
