@@ -1,95 +1,81 @@
 const express = require('express');
-const line = require('@line/bot-sdk');
+const { middleware, Client } = require('@line/bot-sdk');
 const axios = require('axios');
-const FormData = require('form-data');
+const dotenv = require('dotenv');
+const rawBodySaver = require('raw-body');
 const fs = require('fs');
-require('dotenv').config();
+dotenv.config();
 
 const app = express();
-app.use(express.json());
+app.use(express.json({
+  verify: (req, res, buf) => {
+    req.rawBody = buf
+  }
+}));
 
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
   channelSecret: process.env.LINE_CHANNEL_SECRET
 };
 
-const client = new line.Client(config);
+const client = new Client(config);
 
-app.post('/webhook', line.middleware(config), async (req, res) => {
-  Promise.all(req.body.events.map(handleEvent))
-    .then(result => res.json(result))
-    .catch(err => {
-      console.error('Webhook error:', err);
-      res.status(500).end();
-    });
+app.post('/webhook', middleware(config), async (req, res) => {
+  try {
+    const events = req.body.events;
+    const results = await Promise.all(events.map(handleEvent));
+    res.json(results);
+  } catch (err) {
+    console.error(err);
+    res.status(500).end();
+  }
 });
 
 async function handleEvent(event) {
   if (event.type !== 'message' || event.message.type !== 'image') {
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '画像を送ってください！'
-    });
+    return Promise.resolve(null);
   }
 
-  try {
-    const stream = await client.getMessageContent(event.message.id);
-    const filePath = `/tmp/${event.message.id}.jpg`;
-    const writable = fs.createWriteStream(filePath);
-    stream.pipe(writable);
-    await new Promise(resolve => writable.on('finish', resolve));
+  const messageId = event.message.id;
+  const stream = await client.getMessageContent(messageId);
+  const path = `/tmp/${messageId}.jpg`;
+  const writable = fs.createWriteStream(path);
+  stream.pipe(writable);
 
-    const form = new FormData();
-    form.append('file', fs.createReadStream(filePath));
+  await new Promise(resolve => writable.on('finish', resolve));
 
-    const gofileRes = await axios.post('https://api.gofile.io/uploadFile', form, {
-      headers: form.getHeaders()
-    });
+  const goFileRes = await axios.post('https://api.gofile.io/uploadFile', {}, {
+    headers: { 'Content-Type': 'multipart/form-data' },
+    params: {
+      file: fs.createReadStream(path)
+    }
+  });
 
-    const imageUrl = gofileRes.data.data.downloadPage;
+  const imageUrl = goFileRes.data.data.downloadPage;
+  const visionRes = await axios.post('https://api.openai.com/v1/chat/completions', {
+    model: 'gpt-4o',
+    messages: [
+      { role: 'user', content: [
+        { type: 'text', text: 'この画像を説明してください。' },
+        { type: 'image_url', image_url: { url: imageUrl } }
+      ]}
+    ]
+  }, {
+    headers: {
+      'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+      'Content-Type': 'application/json'
+    }
+  });
 
-    const visionRes = await axios.post('https://api.openai.com/v1/chat/completions', {
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: '送られた画像を分析して、日本語でやさしく丁寧に解説してください。'
-        },
-        {
-          role: 'user',
-          content: [
-            {
-              type: 'image_url',
-              image_url: { url: imageUrl }
-            }
-          ]
-        }
-      ],
-      max_tokens: 1000
-    }, {
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      }
-    });
+  const replyText = visionRes.data.choices[0].message.content;
 
-    const replyText = visionRes.data.choices[0].message.content;
-
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: replyText
-    });
-
-  } catch (err) {
-    console.error('Error handling image:', err);
-    return client.replyMessage(event.replyToken, {
-      type: 'text',
-      text: '画像の処理中にエラーが発生しました。'
-    });
-  }
+  return client.replyMessage(event.replyToken, {
+    type: 'text',
+    text: replyText
+  });
 }
 
 const port = process.env.PORT || 3000;
 app.listen(port, () => {
-  console.log(`Server running on ${port}`);
+  console.log(`Server running at http://localhost:${port}/`);
 });
