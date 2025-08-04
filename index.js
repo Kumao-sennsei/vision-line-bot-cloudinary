@@ -11,7 +11,6 @@ const config = {
 };
 const client = new Client(config);
 
-// Webhook受信用エンドポイント
 app.post("/webhook", middleware(config), async (req, res) => {
   console.log("📩 Webhook受信しました！");
 
@@ -40,13 +39,10 @@ app.post("/webhook", middleware(config), async (req, res) => {
   res.json(results);
 });
 
-// 仮ハンドラー関数
+// 仮ハンドラー
 async function handleEvent(event) {
-  if (event.type !== "message") {
-    return Promise.resolve(null);
-  }
+  if (event.type !== "message") return Promise.resolve(null);
 
-  // テキストメッセージ
   if (event.message.type === "text") {
     return client.replyMessage(event.replyToken, {
       type: "text",
@@ -54,7 +50,6 @@ async function handleEvent(event) {
     });
   }
 
-  // 画像メッセージ
   if (event.message.type === "image") {
     return client.replyMessage(event.replyToken, {
       type: "text",
@@ -65,7 +60,6 @@ async function handleEvent(event) {
   return Promise.resolve(null);
 }
 
-// サーバー起動（Railway用にポート固定）
 const PORT = process.env.PORT || 8080;
 app.listen(PORT, () => {
   console.log(`🚀 サーバー起動中 on port ${PORT}`);
