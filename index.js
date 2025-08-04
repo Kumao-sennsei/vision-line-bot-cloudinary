@@ -1,73 +1,95 @@
-const express = require("express");
-const bodyParser = require("body-parser");
-const axios = require("axios");
-require("dotenv").config();
+const express = require('express');
+const line = require('@line/bot-sdk');
+const axios = require('axios');
+const FormData = require('form-data');
+const fs = require('fs');
+require('dotenv').config();
+
 const app = express();
-app.use(bodyParser.json({ limit: "10mb" }));
-app.use(bodyParser.urlencoded({ extended: true }));
+app.use(express.json());
 
-const PORT = process.env.PORT || 8080;
-
-// LINE SDK設定
-const line = require("@line/bot-sdk");
 const config = {
   channelAccessToken: process.env.LINE_CHANNEL_ACCESS_TOKEN,
-  channelSecret: process.env.LINE_CHANNEL_SECRET,
+  channelSecret: process.env.LINE_CHANNEL_SECRET
 };
+
 const client = new line.Client(config);
 
-// GoFileアップロード関数
-async function uploadToGofile(base64Image) {
-  const response = await axios.get("https://api.gofile.io/getServer");
-  const server = response.data.data.server;
-  const uploadUrl = `https://${server}.gofile.io/uploadBase64`;
-
-  const result = await axios.post(uploadUrl, {
-    file: base64Image,
-  });
-
-  return result.data.data.downloadPage;
-}
-
-// Webhookエンドポイント
-app.post("/webhook", line.middleware(config), async (req, res) => {
-  Promise.all(req.body.events.map(handleEvent)).then((result) =>
-    res.json(result)
-  );
+app.post('/webhook', line.middleware(config), async (req, res) => {
+  Promise.all(req.body.events.map(handleEvent))
+    .then(result => res.json(result))
+    .catch(err => {
+      console.error('Webhook error:', err);
+      res.status(500).end();
+    });
 });
 
 async function handleEvent(event) {
-  if (event.type !== "message" || event.message.type !== "image") {
-    return Promise.resolve(null);
+  if (event.type !== 'message' || event.message.type !== 'image') {
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '画像を送ってください！'
+    });
   }
-
-  const messageId = event.message.id;
-
-  const stream = await client.getMessageContent(messageId);
-  const chunks = [];
-
-  for await (const chunk of stream) {
-    chunks.push(chunk);
-  }
-
-  const buffer = Buffer.concat(chunks);
-  const base64Image = buffer.toString("base64");
 
   try {
-    const imageUrl = await uploadToGofile(base64Image);
-    return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: `✅ 画像を受け取りました！
-アップロードURL：${imageUrl}`,
+    const stream = await client.getMessageContent(event.message.id);
+    const filePath = `/tmp/${event.message.id}.jpg`;
+    const writable = fs.createWriteStream(filePath);
+    stream.pipe(writable);
+    await new Promise(resolve => writable.on('finish', resolve));
+
+    const form = new FormData();
+    form.append('file', fs.createReadStream(filePath));
+
+    const gofileRes = await axios.post('https://api.gofile.io/uploadFile', form, {
+      headers: form.getHeaders()
     });
-  } catch (err) {
+
+    const imageUrl = gofileRes.data.data.downloadPage;
+
+    const visionRes = await axios.post('https://api.openai.com/v1/chat/completions', {
+      model: 'gpt-4o',
+      messages: [
+        {
+          role: 'system',
+          content: '送られた画像を分析して、日本語でやさしく丁寧に解説してください。'
+        },
+        {
+          role: 'user',
+          content: [
+            {
+              type: 'image_url',
+              image_url: { url: imageUrl }
+            }
+          ]
+        }
+      ],
+      max_tokens: 1000
+    }, {
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      }
+    });
+
+    const replyText = visionRes.data.choices[0].message.content;
+
     return client.replyMessage(event.replyToken, {
-      type: "text",
-      text: "⚠️ エラーが発生しました（GoFileアップロード失敗）",
+      type: 'text',
+      text: replyText
+    });
+
+  } catch (err) {
+    console.error('Error handling image:', err);
+    return client.replyMessage(event.replyToken, {
+      type: 'text',
+      text: '画像の処理中にエラーが発生しました。'
     });
   }
 }
 
-app.listen(PORT, () => {
-  console.log(`🚀 GoFile対応サーバー起動中 on port ${PORT}`);
+const port = process.env.PORT || 3000;
+app.listen(port, () => {
+  console.log(`Server running on ${port}`);
 });
