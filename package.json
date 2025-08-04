@@ -1,1 +1,1 @@
-{ "name": "vision-line-bot", "dependencies": { "@line/bot-sdk": "7.5.2" } }
+// package.json content goes here
